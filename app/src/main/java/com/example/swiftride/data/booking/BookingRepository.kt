@@ -9,17 +9,37 @@ import kotlin.random.Random
 import com.example.swiftride.data.routing.RoutingRepository
 import com.example.swiftride.data.routing.RouteResult
 import com.example.swiftride.data.routing.RouteProvider
+import kotlinx.coroutines.flow.Flow
+import com.example.swiftride.data.local.dao.RideDao
+import com.example.swiftride.data.local.entities.RideEntity
 
 interface BookingRepository {
     val bookingState: StateFlow<RideBookingState>
-    fun confirmBooking(pickup: GeoPoint, destination: GeoPoint, scope: CoroutineScope)
+    fun confirmBooking(
+        pickup: GeoPoint,
+        destination: GeoPoint,
+        pickupName: String = "Pickup",
+        pickupAddress: String = "",
+        destinationName: String = "Destination",
+        destinationAddress: String = "",
+        fare: Double = 0.0,
+        rideCategory: String = "SwiftX",
+        durationMinutes: Int = 10,
+        scope: CoroutineScope
+    )
     fun cancelBooking()
     fun clearBookingState()
+    fun getRideHistory(): Flow<List<RideEntity>>
+    fun getRideHistory(limit: Int): Flow<List<RideEntity>>
+    suspend fun getRidesPaged(limit: Int, offset: Int): List<RideEntity>
+    suspend fun saveRide(ride: RideEntity)
+    suspend fun deleteRide(rideId: String)
 }
 
 class SimulatedBookingRepository(
     private val driverRepository: DriverRepository,
-    private val routingRepository: RoutingRepository
+    private val routingRepository: RoutingRepository,
+    private val rideDao: RideDao
 ) : BookingRepository {
 
     private val _bookingState = MutableStateFlow(RideBookingState())
@@ -27,7 +47,41 @@ class SimulatedBookingRepository(
 
     private var simulationJob: Job? = null
 
-    override fun confirmBooking(pickup: GeoPoint, destination: GeoPoint, scope: CoroutineScope) {
+    // Temporarily stored details to persist completed/cancelled rides correctly
+    private var currentRideId: String? = null
+    private var currentPickup: GeoPoint? = null
+    private var currentDestination: GeoPoint? = null
+    private var currentPickupName: String = ""
+    private var currentPickupAddress: String = ""
+    private var currentDestinationName: String = ""
+    private var currentDestinationAddress: String = ""
+    private var currentFare: Double = 0.0
+    private var currentRideCategory: String = "SwiftX"
+    private var currentDurationMinutes: Int = 10
+
+    override fun confirmBooking(
+        pickup: GeoPoint,
+        destination: GeoPoint,
+        pickupName: String,
+        pickupAddress: String,
+        destinationName: String,
+        destinationAddress: String,
+        fare: Double,
+        rideCategory: String,
+        durationMinutes: Int,
+        scope: CoroutineScope
+    ) {
+        currentRideId = java.util.UUID.randomUUID().toString()
+        currentPickup = pickup
+        currentDestination = destination
+        currentPickupName = pickupName
+        currentPickupAddress = pickupAddress
+        currentDestinationName = destinationName
+        currentDestinationAddress = destinationAddress
+        currentFare = fare
+        currentRideCategory = rideCategory
+        currentDurationMinutes = durationMinutes
+
         simulationJob?.cancel()
         simulationJob = scope.launch(Dispatchers.Default) {
             // 1. Searching state
@@ -214,6 +268,32 @@ class SimulatedBookingRepository(
             }
 
             // 8. Ride Completed
+            val rideId = currentRideId ?: java.util.UUID.randomUUID().toString()
+            val finalRide = RideEntity(
+                id = rideId,
+                pickupLatitude = pickup.latitude,
+                pickupLongitude = pickup.longitude,
+                pickupName = pickupName,
+                pickupAddress = pickupAddress,
+                destinationLatitude = destination.latitude,
+                destinationLongitude = destination.longitude,
+                destinationName = destinationName,
+                destinationAddress = destinationAddress,
+                status = RideState.RideCompleted.name,
+                fare = fare,
+                timestamp = System.currentTimeMillis(),
+                driverId = nearestDriver.id,
+                driverName = nearestDriver.name,
+                driverPhone = null,
+                distanceMeters = tripDistanceMeters,
+                etaMinutes = 0,
+                rideCategory = rideCategory,
+                durationMinutes = durationMinutes
+            )
+            withContext(Dispatchers.IO) {
+                rideDao.insertRide(finalRide)
+            }
+
             _bookingState.value = _bookingState.value.copy(
                 status = RideState.RideCompleted,
                 currentDriverLocation = destination,
@@ -229,12 +309,66 @@ class SimulatedBookingRepository(
             driverRepository.releaseDriver(it.id)
         }
         simulationJob?.cancel()
+
+        // Persist cancelled ride information
+        val pickup = currentPickup
+        val destination = currentDestination
+        val rideId = currentRideId ?: java.util.UUID.randomUUID().toString()
+        if (pickup != null && destination != null) {
+            CoroutineScope(Dispatchers.IO).launch {
+                val cancelledRide = RideEntity(
+                    id = rideId,
+                    pickupLatitude = pickup.latitude,
+                    pickupLongitude = pickup.longitude,
+                    pickupName = currentPickupName,
+                    pickupAddress = currentPickupAddress,
+                    destinationLatitude = destination.latitude,
+                    destinationLongitude = destination.longitude,
+                    destinationName = currentDestinationName,
+                    destinationAddress = currentDestinationAddress,
+                    status = RideState.RideCancelled.name,
+                    fare = currentFare,
+                    timestamp = System.currentTimeMillis(),
+                    driverId = current.assignedDriver?.id,
+                    driverName = current.assignedDriver?.name,
+                    driverPhone = null,
+                    distanceMeters = current.distanceMeters,
+                    etaMinutes = current.etaMinutes,
+                    rideCategory = currentRideCategory,
+                    durationMinutes = currentDurationMinutes
+                )
+                rideDao.insertRide(cancelledRide)
+            }
+        }
+
         _bookingState.value = RideBookingState(status = RideState.RideCancelled)
     }
 
     override fun clearBookingState() {
         simulationJob?.cancel()
         _bookingState.value = RideBookingState(status = RideState.Idle)
+    }
+
+    override fun getRideHistory(): Flow<List<RideEntity>> = rideDao.getAllRides()
+
+    override fun getRideHistory(limit: Int): Flow<List<RideEntity>> = rideDao.getRidesWithLimit(limit)
+
+    override suspend fun getRidesPaged(limit: Int, offset: Int): List<RideEntity> {
+        return withContext(Dispatchers.IO) {
+            rideDao.getRidesPaged(limit, offset)
+        }
+    }
+
+    override suspend fun saveRide(ride: RideEntity) {
+        withContext(Dispatchers.IO) {
+            rideDao.insertRide(ride)
+        }
+    }
+
+    override suspend fun deleteRide(rideId: String) {
+        withContext(Dispatchers.IO) {
+            rideDao.deleteRideById(rideId)
+        }
     }
 
     private fun sampleRoutePoints(points: List<GeoPoint>, numSamples: Int): List<GeoPoint> {

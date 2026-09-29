@@ -4,8 +4,11 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.swiftride.data.location.LocationData
 import com.example.swiftride.data.location.LocationRepository
+import com.example.swiftride.data.local.entities.SavedPlaceEntity
+import com.example.swiftride.data.local.entities.RecentSearchEntity
 import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -35,7 +38,14 @@ class LocationViewModel(private val repository: LocationRepository) : ViewModel(
     
     private var searchJob: Job? = null
 
+    // Room Database flows
+    val savedPlaces: Flow<List<SavedPlaceEntity>> = repository.getSavedPlaces()
+    val recentSearches: Flow<List<RecentSearchEntity>> = repository.getRecentSearches()
+
     init {
+        viewModelScope.launch {
+            repository.seedDefaultPlacesIfEmpty()
+        }
         viewModelScope.launch {
             _searchQuery
                 .debounce(400)
@@ -120,6 +130,46 @@ class LocationViewModel(private val repository: LocationRepository) : ViewModel(
     fun clearSuggestions() {
         _searchSuggestions.value = emptyList()
         _searchQuery.value = ""
+    }
+
+    // Saved Places persistence methods
+    fun saveSavedPlace(name: String, fullAddress: String, latitude: Double, longitude: Double, iconType: String) {
+        viewModelScope.launch {
+            repository.saveSavedPlace(
+                SavedPlaceEntity(
+                    name = name,
+                    fullAddress = fullAddress,
+                    latitude = latitude,
+                    longitude = longitude,
+                    iconType = iconType
+                )
+            )
+        }
+    }
+
+    fun deleteSavedPlace(place: SavedPlaceEntity) {
+        viewModelScope.launch {
+            repository.deleteSavedPlace(place)
+        }
+    }
+
+    // Recent Searches persistence methods
+    fun saveRecentSearch(query: String, latitude: Double? = null, longitude: Double? = null, address: String? = null) {
+        viewModelScope.launch {
+            repository.saveRecentSearch(query, latitude, longitude, address)
+        }
+    }
+
+    fun deleteRecentSearch(query: String) {
+        viewModelScope.launch {
+            repository.deleteRecentSearch(query)
+        }
+    }
+
+    fun clearRecentSearches() {
+        viewModelScope.launch {
+            repository.clearRecentSearches()
+        }
     }
 }
 

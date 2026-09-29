@@ -79,6 +79,7 @@ import androidx.compose.ui.res.painterResource
 import com.example.swiftride.R
 import com.example.swiftride.data.AppLanguage
 import com.example.swiftride.data.translate
+import com.example.swiftride.data.location.LocationData
 import androidx.compose.material3.Icon
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Female
@@ -181,6 +182,7 @@ fun HomeScreen(
     onLanguageChange: (String) -> Unit,
     onLogout: () -> Unit,
     onDeleteAccount: () -> Unit,
+    onNavigateToHistory: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     val rideOptions = remember {
@@ -201,6 +203,11 @@ fun HomeScreen(
 
     val bookingState by bookingViewModel.bookingState.collectAsState()
     var showBookingReview by remember { mutableStateOf(false) }
+
+    // Room Database flows
+    val savedPlacesFromDb by locationViewModel.savedPlaces.collectAsState(initial = emptyList())
+    val rideHistoryFromDb by bookingViewModel.rideHistory.collectAsState(initial = emptyList())
+    val recentSearchesFromDb by locationViewModel.recentSearches.collectAsState(initial = emptyList())
 
     val services = remember {
         listOf(
@@ -817,11 +824,16 @@ fun HomeScreen(
                                     )
                                     Spacer(modifier = Modifier.height(12.dp))
                                     
-                                    val savedPlaces = listOf(
-                                        Triple("Home", "123 Main St, Bengaluru", androidx.compose.material.icons.Icons.Default.Home),
-                                        Triple("Work", "Tech Park Building 4, Bengaluru", androidx.compose.material.icons.Icons.Default.Work),
-                                        Triple("Add New Place", "Set location on map", androidx.compose.material.icons.Icons.Default.Add)
-                                    )
+                                    val savedPlaces = savedPlacesFromDb.map { entity ->
+                                        val icon = when (entity.iconType) {
+                                            "HOME" -> androidx.compose.material.icons.Icons.Default.Home
+                                            "WORK" -> androidx.compose.material.icons.Icons.Default.Work
+                                            else -> androidx.compose.material.icons.Icons.Default.LocalTaxi
+                                        }
+                                        Triple(entity.name, entity.fullAddress, icon) to (LocationData(entity.name, entity.fullAddress, entity.latitude, entity.longitude) as LocationData?)
+                                    }.toMutableList().apply {
+                                        add(Triple("Add New Place", "Set location on map", androidx.compose.material.icons.Icons.Default.Add) to null)
+                                    }
                                     
                                     Card(
                                         modifier = Modifier.fillMaxWidth(),
@@ -832,11 +844,18 @@ fun HomeScreen(
                                         border = BorderStroke(1.dp, if (isDarkMode) Color(0xFF333333) else Color(0xFFEFEFEF))
                                     ) {
                                         Column {
-                                            savedPlaces.forEachIndexed { idx, (label, desc, icon) ->
+                                            savedPlaces.forEachIndexed { idx, pair ->
+                                                val (info, locData) = pair
+                                                val (label, desc, icon) = info
                                                 Row(
                                                     modifier = Modifier
                                                         .fillMaxWidth()
-                                                        .clickable { showLocationInputs = true }
+                                                        .clickable {
+                                                            if (locData != null) {
+                                                                locationViewModel.setDestination(locData)
+                                                            }
+                                                            showLocationInputs = true
+                                                        }
                                                         .padding(horizontal = 16.dp, vertical = 12.dp),
                                                     verticalAlignment = Alignment.CenterVertically
                                                 ) {
@@ -897,61 +916,85 @@ fun HomeScreen(
                                     )
                                     Spacer(modifier = Modifier.height(12.dp))
                                     
-                                    val recentTrips = listOf(
-                                        Triple("Indiranagar", "Koramangala 5th Block", "₹188 • Yesterday"),
-                                        Triple("Malleshwaram", "Kempegowda Airport", "₹640 • July 5"),
-                                        Triple("MG Road Metro", "Commercial Street", "₹120 • July 3")
-                                    )
-                                    
-                                    Card(
-                                        modifier = Modifier.fillMaxWidth(),
-                                        shape = RoundedCornerShape(16.dp),
-                                        colors = CardDefaults.cardColors(
-                                            containerColor = if (isDarkMode) Color(0xFF1E1E1E) else Color(0xFFFFFFFF)
-                                        ),
-                                        border = BorderStroke(1.dp, if (isDarkMode) Color(0xFF333333) else Color(0xFFEFEFEF))
-                                    ) {
-                                        Column {
-                                            recentTrips.forEachIndexed { idx, (pickup, dest, details) ->
-                                                Row(
-                                                    modifier = Modifier
-                                                        .fillMaxWidth()
-                                                        .clickable { showLocationInputs = true }
-                                                        .padding(horizontal = 16.dp, vertical = 12.dp),
-                                                    verticalAlignment = Alignment.CenterVertically
-                                                ) {
-                                                    Icon(
-                                                        imageVector = androidx.compose.material.icons.Icons.Default.History,
-                                                        contentDescription = null,
-                                                        tint = if (isDarkMode) Color.White.copy(alpha = 0.5f) else Color.Black.copy(alpha = 0.5f),
-                                                        modifier = Modifier.size(20.dp)
-                                                    )
-                                                    Spacer(modifier = Modifier.width(16.dp))
-                                                    Column(modifier = Modifier.weight(1f)) {
-                                                        Text(
-                                                            text = "$pickup ➔ $dest".translate(selectedLanguage),
-                                                            color = if (isDarkMode) Color.White else Color.Black,
-                                                            fontSize = 13.sp,
-                                                            fontWeight = FontWeight.SemiBold,
-                                                            fontFamily = FontFamily.SansSerif
-                                                        )
-                                                        Text(
-                                                            text = details.translate(selectedLanguage),
-                                                            color = if (isDarkMode) Color.White.copy(alpha = 0.5f) else Color.Black.copy(alpha = 0.5f),
-                                                            fontSize = 11.sp,
-                                                            fontFamily = FontFamily.SansSerif
-                                                        )
-                                                    }
-                                                }
-                                                if (idx < recentTrips.size - 1) {
-                                                    HorizontalDivider(
-                                                        color = if (isDarkMode) Color(0xFF333333) else Color(0xFFEFEFEF),
-                                                        modifier = Modifier.padding(horizontal = 16.dp)
-                                                    )
-                                                }
-                                            }
-                                        }
-                                    }
+                                    val recentTrips = rideHistoryFromDb.map { entity ->
+                                         val dateStr = try {
+                                             val sdf = java.text.SimpleDateFormat("MMM d, h:mm a", java.util.Locale.getDefault())
+                                             sdf.format(java.util.Date(entity.timestamp))
+                                         } catch (e: Exception) {
+                                             "Recent"
+                                         }
+                                         val details = "₹${entity.fare.toInt()} • $dateStr"
+                                         Triple(entity.pickupName, entity.destinationName, details) to (
+                                             LocationData(entity.pickupName, entity.pickupAddress, entity.pickupLatitude, entity.pickupLongitude) to
+                                             LocationData(entity.destinationName, entity.destinationAddress, entity.destinationLatitude, entity.destinationLongitude)
+                                         )
+                                     }
+                                     
+                                     Card(
+                                         modifier = Modifier.fillMaxWidth(),
+                                         shape = RoundedCornerShape(16.dp),
+                                         colors = CardDefaults.cardColors(
+                                             containerColor = if (isDarkMode) Color(0xFF1E1E1E) else Color(0xFFFFFFFF)
+                                         ),
+                                         border = BorderStroke(1.dp, if (isDarkMode) Color(0xFF333333) else Color(0xFFEFEFEF))
+                                     ) {
+                                         Column {
+                                             if (recentTrips.isEmpty()) {
+                                                 Text(
+                                                     text = "No recent trips".translate(selectedLanguage),
+                                                     color = if (isDarkMode) Color.White.copy(alpha = 0.5f) else Color.Black.copy(alpha = 0.5f),
+                                                     fontSize = 13.sp,
+                                                     fontFamily = FontFamily.SansSerif,
+                                                     modifier = Modifier.padding(16.dp)
+                                                 )
+                                             } else {
+                                                 recentTrips.forEachIndexed { idx, pair ->
+                                                     val (info, coords) = pair
+                                                     val (pickup, dest, details) = info
+                                                     Row(
+                                                         modifier = Modifier
+                                                             .fillMaxWidth()
+                                                             .clickable {
+                                                                 locationViewModel.setPickup(coords.component1())
+                                                                 locationViewModel.setDestination(coords.component2())
+                                                                 showLocationInputs = true
+                                                             }
+                                                             .padding(horizontal = 16.dp, vertical = 12.dp),
+                                                         verticalAlignment = Alignment.CenterVertically
+                                                     ) {
+                                                         Icon(
+                                                             imageVector = androidx.compose.material.icons.Icons.Default.History,
+                                                             contentDescription = null,
+                                                             tint = if (isDarkMode) Color.White.copy(alpha = 0.5f) else Color.Black.copy(alpha = 0.5f),
+                                                             modifier = Modifier.size(20.dp)
+                                                         )
+                                                         Spacer(modifier = Modifier.width(16.dp))
+                                                         Column(modifier = Modifier.weight(1f)) {
+                                                             Text(
+                                                                 text = "$pickup ➔ $dest".translate(selectedLanguage),
+                                                                 color = if (isDarkMode) Color.White else Color.Black,
+                                                                 fontSize = 13.sp,
+                                                                 fontWeight = FontWeight.SemiBold,
+                                                                 fontFamily = FontFamily.SansSerif
+                                                             )
+                                                             Text(
+                                                                 text = details.translate(selectedLanguage),
+                                                                 color = if (isDarkMode) Color.White.copy(alpha = 0.5f) else Color.Black.copy(alpha = 0.5f),
+                                                                 fontSize = 11.sp,
+                                                                 fontFamily = FontFamily.SansSerif
+                                                             )
+                                                         }
+                                                     }
+                                                     if (idx < recentTrips.size - 1) {
+                                                         HorizontalDivider(
+                                                             color = if (isDarkMode) Color(0xFF333333) else Color(0xFFEFEFEF),
+                                                             modifier = Modifier.padding(horizontal = 16.dp)
+                                                         )
+                                                     }
+                                                 }
+                                             }
+                                         }
+                                     }
                                 }
 
                                 Spacer(modifier = Modifier.height(24.dp))
@@ -1119,15 +1162,25 @@ fun HomeScreen(
                                                         bookingState = bookingState,
                                                         pickupName = pickupLocationState?.name ?: "Pickup",
                                                         destinationName = destinationLocationState?.name ?: "Destination",
-                                                        categoryName = categoryName,
+                                                         categoryName = categoryName,
                                                         farePrice = price,
                                                         distanceKm = routeState.routeData.distanceMeters / 1000.0,
                                                         durationMinutes = (routeState.routeData.durationSeconds / 60.0).toInt(),
                                                         selectedLanguage = selectedLanguage,
                                                         isDarkMode = isDarkMode,
                                                         onConfirm = {
-                                                            bookingViewModel.confirmBooking(pickupCoords, destinationCoords)
-                                                        },
+                                                             bookingViewModel.confirmBooking(
+                                                                 pickup = pickupCoords,
+                                                                 destination = destinationCoords,
+                                                                 pickupName = pickupLocationState?.name ?: "Pickup",
+                                                                 pickupAddress = pickupLocationState?.fullAddress ?: "",
+                                                                 destinationName = destinationLocationState?.name ?: "Destination",
+                                                                 destinationAddress = destinationLocationState?.fullAddress ?: "",
+                                                                 fare = price,
+                                                                 rideCategory = categoryName,
+                                                                 durationMinutes = (routeState.routeData.durationSeconds / 60.0).toInt().coerceAtLeast(1)
+                                                             )
+                                                         },
                                                         onCancel = {
                                                             if (bookingState.status == com.example.swiftride.data.booking.RideState.Idle) {
                                                                 showBookingReview = false
@@ -1301,6 +1354,8 @@ fun HomeScreen(
                                             .clickable {
                                                 if (title == "App Settings") {
                                                     showSettingsDialog = true
+                                                } else if (title == "Your Trips") {
+                                                    onNavigateToHistory()
                                                 }
                                             }
                                             .padding(vertical = 14.dp, horizontal = 4.dp)
@@ -2798,7 +2853,20 @@ fun ActivityScreen(selectedLanguage: String) {
 @Composable
 fun HomeScreenPreview() {
     val context = androidx.compose.ui.platform.LocalContext.current
-    val mockRepository = remember { com.example.swiftride.data.location.LocationRepository(com.example.swiftride.data.location.NominatimService(), com.example.swiftride.data.location.LocationProvider(context)) }
+    val db = remember {
+        androidx.room.Room.inMemoryDatabaseBuilder(
+            context,
+            com.example.swiftride.data.local.SwiftRideDatabase::class.java
+        ).allowMainThreadQueries().build()
+    }
+    val mockRepository = remember {
+        com.example.swiftride.data.location.LocationRepository(
+            com.example.swiftride.data.location.NominatimService(),
+            com.example.swiftride.data.location.LocationProvider(context),
+            db.savedPlaceDao(),
+            db.recentSearchDao()
+        )
+    }
     val mockViewModel = remember { com.example.swiftride.viewmodel.LocationViewModel(mockRepository) }
     val mockRouteRepository = remember {
         com.example.swiftride.data.routing.RoutingRepository(
@@ -2814,7 +2882,8 @@ fun HomeScreenPreview() {
     val mockBookingRepository = remember {
         com.example.swiftride.data.booking.SimulatedBookingRepository(
             com.example.swiftride.data.booking.SimulatedDriverRepository(),
-            mockRouteRepository
+            mockRouteRepository,
+            db.rideDao()
         )
     }
     val mockBookingViewModel = remember { com.example.swiftride.viewmodel.BookingViewModel(mockBookingRepository) }
@@ -2831,7 +2900,8 @@ fun HomeScreenPreview() {
         onThemeToggle = {},
         onLanguageChange = {},
         onLogout = {},
-        onDeleteAccount = {}
+        onDeleteAccount = {},
+        onNavigateToHistory = {}
     )
 }
 

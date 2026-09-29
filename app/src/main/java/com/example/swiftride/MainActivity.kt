@@ -41,11 +41,16 @@ import com.example.swiftride.data.booking.SimulatedDriverRepository
 import com.example.swiftride.data.booking.SimulatedBookingRepository
 import com.example.swiftride.viewmodel.BookingViewModel
 import com.example.swiftride.viewmodel.BookingViewModelFactory
+import com.example.swiftride.data.local.SwiftRideDatabase
+import com.example.swiftride.ui.components.RideHistoryScreen
+import com.example.swiftride.ui.components.RideDetailsScreen
 
 sealed interface Screen {
     object Splash : Screen
     object Auth : Screen
     data class Home(val userName: String) : Screen
+    object RideHistory : Screen
+    data class RideDetails(val rideId: String) : Screen
 }
 
 class MainActivity : ComponentActivity() {
@@ -57,9 +62,16 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
         setContent {
             val userRepository = remember { UserRepository(this@MainActivity) }
+            
+            // Local persistence Database initialization
+            val database = remember { SwiftRideDatabase.getDatabase(this@MainActivity) }
+            val rideDao = remember { database.rideDao() }
+            val savedPlaceDao = remember { database.savedPlaceDao() }
+            val recentSearchDao = remember { database.recentSearchDao() }
+
             val nominatimService = remember { NominatimService() }
             val locationProvider = remember { LocationProvider(this@MainActivity) }
-            val locationRepository = remember { LocationRepository(nominatimService, locationProvider) }
+            val locationRepository = remember { LocationRepository(nominatimService, locationProvider, savedPlaceDao, recentSearchDao) }
             val locationViewModel = remember {
                 androidx.lifecycle.ViewModelProvider(
                     this@MainActivity,
@@ -97,7 +109,7 @@ class MainActivity : ComponentActivity() {
             }
             val bookingViewModel = remember {
                 val driverRepository = SimulatedDriverRepository()
-                val bookingRepository = SimulatedBookingRepository(driverRepository, routingRepository)
+                val bookingRepository = SimulatedBookingRepository(driverRepository, routingRepository, rideDao)
                 androidx.lifecycle.ViewModelProvider(
                     this@MainActivity,
                     BookingViewModelFactory(bookingRepository)
@@ -182,6 +194,35 @@ class MainActivity : ComponentActivity() {
                                         userRepository.deleteCurrentUser()
                                         profilePicturePath = null
                                         currentScreen = Screen.Auth
+                                    },
+                                    onNavigateToHistory = {
+                                        currentScreen = Screen.RideHistory
+                                    }
+                                )
+                            }
+                            is Screen.RideHistory -> {
+                                RideHistoryScreen(
+                                    bookingViewModel = bookingViewModel,
+                                    selectedLanguage = selectedLanguage,
+                                    isDarkMode = isDarkMode,
+                                    onBack = {
+                                        val currentUser = userRepository.getCurrentUser() ?: "Rider"
+                                        currentScreen = Screen.Home(currentUser)
+                                    },
+                                    onRideSelect = { rideId ->
+                                        currentScreen = Screen.RideDetails(rideId)
+                                    }
+                                )
+                            }
+                            is Screen.RideDetails -> {
+                                RideDetailsScreen(
+                                    rideId = screen.rideId,
+                                    bookingViewModel = bookingViewModel,
+                                    routeViewModel = routeViewModel,
+                                    selectedLanguage = selectedLanguage,
+                                    isDarkMode = isDarkMode,
+                                    onBack = {
+                                        currentScreen = Screen.RideHistory
                                     }
                                 )
                             }
